@@ -153,6 +153,54 @@ function Write-YamlList {
     Write-Host "> 已生成 YAML: ${FootageFolder}/${RankNum}_${Part}.yml" -ForegroundColor Cyan
 }
 
+function Write-RankdoorCsv {
+    $sections = @(
+        @{ label = '主榜'; suffix = 'results'; max = 99; min = 21 },
+        @{ label = '主榜'; suffix = 'results'; max = 20; min = 11 },
+        @{ label = '主榜'; suffix = 'results'; max = 10; min = 4 },
+        @{ label = '主榜'; suffix = 'results'; max = 3; min = 1 },
+        @{ label = '历史'; suffix = 'results_history'; max = 5; min = 1 },
+        @{ label = '国创'; suffix = 'guoman_bangumi'; max = 10; min = 1 },
+        @{ label = '番剧'; suffix = 'results_bangumi'; max = 10; min = 1 }
+    )
+
+    $csvLines = New-Object System.Collections.Generic.List[string]
+
+    foreach ($section in $sections) {
+        $jsonPath = "./${RankNum}_$($section.suffix).json"
+        if (-not (Test-Path $jsonPath)) { continue }
+
+        $content = Get-Content $jsonPath -Raw | ConvertFrom-Json
+        $rankFrom = $content[0].rank_from
+        $max = $section.max
+        if ($rankFrom -le $max) { $max = $rankFrom }
+
+        $items = New-Object System.Collections.Generic.List[PSObject]
+        foreach ($x in $content) {
+            if ($null -eq $x.info -and $x.sp_type_id -ne 2) {
+                $rank = if ($null -ne $x.score_rank) { $x.score_rank } else { $x.rank }
+                if ($rank -le $max -and $rank -ge $section.min) {
+                    $items.Add([PSCustomObject]@{
+                            rank = [int]$rank
+                            bvid = ($x.bv -replace '^bv', 'BV')
+                        })
+                }
+            }
+        }
+
+        if ($items.Count -eq 0) { continue }
+
+        $csvLines.Add($section.label)
+        $items | Sort-Object -Property rank -Descending | ForEach-Object {
+            $csvLines.Add("$($_.rank),$($_.bvid)")
+        }
+    }
+
+    $csvPath = "${TruePath}/${RankNum}_rankdoor.csv"
+    $csvLines | Set-Content -Path $csvPath -Encoding UTF8
+    Write-Host "> 已生成 Rankdoor CSV: ${csvPath}" -ForegroundColor Cyan
+}
+
 function Main {
     $targetFiles = @('results_bangumi', 'guoman_bangumi', 'results_history', 'results' )
 
@@ -199,7 +247,15 @@ function Main {
     Write-YamlList -Suffix 'results' -Max 10 -Min 4 -Part 13
     Write-YamlList -Suffix 'results_history' -Max 5 -Min 1 -Part 15
     Write-YamlList -Suffix 'results' -Max 3 -Min 1 -Part 16
-    Compress-Archive -Path "${FootageFolder}/${RankNum}*.yml" -DestinationPath "${TruePath}/${RankNum}_list1.zip" -Update
+    Write-RankdoorCsv
+    uv run .\generate.py
+    $rankStartTime = [DateTimeOffset]::FromUnixTimeSeconds(1276876800 + ([int64]$RankNum * 604800)).LocalDateTime
+    $archivePaths = @("${FootageFolder}/${RankNum}*.yml")
+    $pngFiles = Get-ChildItem -Path "${FootageFolder}/*.png" -File -ErrorAction SilentlyContinue | Where-Object { $_.CreationTime -gt $rankStartTime }
+    if ($pngFiles.Count -gt 0) {
+        $archivePaths += $pngFiles.FullName
+    }
+    Compress-Archive -Path $archivePaths -DestinationPath "${TruePath}/${RankNum}_list1.zip" -Update
 }
 
 Main
